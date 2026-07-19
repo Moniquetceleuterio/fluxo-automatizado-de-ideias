@@ -1,0 +1,21 @@
+cff-version: 1.2.0
+message: "Se você utilizar este software, cite-o conforme indicado abaixo."
+type: software
+title: "Fluxo Automatizado de Ideias"
+abstract: "Sistema integrado com Google Forms, Google Planilhas e Google Tarefas para registrar ideias e automatizar o acompanhamento de prazos."
+authors:
+  - family-names: "Eleutério"
+    given-names: "Monique"
+    orcid: "https://orcid.org/0009-0009-4167-4101"
+version: "1.0.0"
+date-released: "2026-07-18"
+repository-code: "https://github.com/Moniquetceleuterio/fluxo-automatizado-de-ideias"
+url: "https://github.com/Moniquetceleuterio/fluxo-automatizado-de-ideias"
+license: MIT
+keywords:
+  - google-apps-script
+  - google-forms
+  - google-sheets
+  - google-tasks
+  - automation
+  - academic-workflow
