@@ -2,12 +2,14 @@ const CONFIG = {
   NOME_ABA: 'Respostas ao formulário 1',
   NOME_LISTA_TAREFAS: 'Projetos e publicações',
   LIMITE_TITULO: 80,
+  LIMITE_NOTAS: 8000,
   COLUNA_STATUS: 'Status da tarefa',
   COLUNA_ID_TAREFA: 'ID da tarefa no Google Tarefas'
 };
 
 /**
- * Executada automaticamente pelo gatilho de envio do formulário.
+ * Executada automaticamente quando uma resposta é enviada pelo formulário.
+ * O gatilho instalável é criado pela função configurarAutomacao().
  */
 function aoEnviarFormulario(e) {
   const planilha = e.source;
@@ -21,8 +23,10 @@ function aoEnviarFormulario(e) {
 }
 
 /**
- * Prepara as colunas auxiliares, a lista de tarefas e o gatilho.
- * Execute esta função uma vez após copiar o projeto.
+ * Execute esta função uma única vez para:
+ * 1. garantir as colunas técnicas;
+ * 2. garantir a lista no Google Tarefas;
+ * 3. criar o gatilho de envio do formulário.
  */
 function configurarAutomacao() {
   const planilha = SpreadsheetApp.getActive();
@@ -31,7 +35,7 @@ function configurarAutomacao() {
   if (!aba) {
     throw new Error(
       'A aba "' + CONFIG.NOME_ABA + '" não foi encontrada. ' +
-      'Confira o nome definido em CONFIG.'
+      'Atualize CONFIG.NOME_ABA com o nome correto.'
     );
   }
 
@@ -44,17 +48,21 @@ function configurarAutomacao() {
   });
 
   if (!gatilhoExiste) {
-    ScriptApp.newTrigger('aoEnviarFormulario')
+    ScriptApp
+      .newTrigger('aoEnviarFormulario')
       .forSpreadsheet(planilha)
       .onFormSubmit()
       .create();
   }
 
-  SpreadsheetApp.getUi().alert(
-    'Automação configurada. Envie uma resposta de teste pelo formulário.'
+  console.log(
+    'Automação configurada. As próximas respostas serão processadas automaticamente.'
   );
 }
 
+/**
+ * Processa uma linha da planilha de respostas.
+ */
 function processarLinha_(planilha, aba, numeroLinha) {
   const ultimaColuna = aba.getLastColumn();
   const cabecalhos = aba
@@ -63,44 +71,48 @@ function processarLinha_(planilha, aba, numeroLinha) {
   const valores = aba
     .getRange(numeroLinha, 1, 1, ultimaColuna)
     .getValues()[0];
-  const exibidos = aba
+  const valoresExibidos = aba
     .getRange(numeroLinha, 1, 1, ultimaColuna)
     .getDisplayValues()[0];
 
-  const colunas = mapearColunas_(cabecalhos);
-  const colunaStatus = localizarColuna_(colunas, [CONFIG.COLUNA_STATUS]);
-  const colunaId = localizarColuna_(colunas, [CONFIG.COLUNA_ID_TAREFA]);
+  const mapa = mapearColunas_(cabecalhos);
+  const colunaStatus = localizarColuna_(mapa, [CONFIG.COLUNA_STATUS]);
+  const colunaId = localizarColuna_(mapa, [CONFIG.COLUNA_ID_TAREFA]);
 
   try {
-    const ideia = primeiroValor_(exibidos, colunas, [
-      'Ideias',
-      'Ideia',
-      'Título da ideia'
-    ]);
-    const tipo = primeiroValor_(exibidos, colunas, [
-      'Tipo de Ideias',
-      'Tipo de ideias',
-      'Tipo de produção'
-    ]);
-    const proximaAcao = primeiroValor_(exibidos, colunas, [
-      'Próxima ação'
-    ]);
-    const observacoes = primeiroValor_(exibidos, colunas, [
-      'Observações ou links',
-      'Observações'
-    ]);
-    const anexos = primeiroValor_(exibidos, colunas, [
-      'Anexar prints, PDFs ou documentos relacionados',
-      'Anexos'
-    ]);
-    const colunaData = localizarColuna_(colunas, [
-      'Data do prazo',
-      'Prazo'
-    ]);
-    const dataPrazo = colunaData === -1 ? '' : valores[colunaData];
+    const ideia = obterValorExibido_(
+      mapa,
+      valoresExibidos,
+      ['Ideia', 'Ideias', 'Título da ideia']
+    );
+    const tipo = obterValorExibido_(
+      mapa,
+      valoresExibidos,
+      ['Tipo', 'Tipo de Ideias', 'Tipo de ideias', 'Tipo de produção']
+    );
+    const proximaAcao = obterValorExibido_(
+      mapa,
+      valoresExibidos,
+      ['Ações', 'Próxima ação']
+    );
+    const observacoes = obterValorExibido_(
+      mapa,
+      valoresExibidos,
+      ['Observações ou links']
+    );
+    const anexos = obterValorExibido_(
+      mapa,
+      valoresExibidos,
+      ['Anexar prints, PDFs ou documentos relacionados']
+    );
+    const dataPrazo = obterValorOriginal_(
+      mapa,
+      valores,
+      ['Data do prazo']
+    );
 
     if (!ideia) {
-      throw new Error('A ideia não foi encontrada na linha enviada.');
+      throw new Error('A coluna "Ideia" está vazia nesta resposta.');
     }
 
     if (!dataPrazo) {
@@ -109,8 +121,21 @@ function processarLinha_(planilha, aba, numeroLinha) {
       return;
     }
 
+    const dataValida = dataPrazo instanceof Date
+      ? dataPrazo
+      : new Date(dataPrazo);
+
+    if (isNaN(dataValida.getTime())) {
+      throw new Error('A data do prazo não pôde ser interpretada.');
+    }
+
     const lista = obterOuCriarListaDeTarefas_();
-    const idExistente = colunaId === -1 ? '' : String(valores[colunaId] || '');
+    const idExistente = obterValorExibido_(
+      mapa,
+      valoresExibidos,
+      [CONFIG.COLUNA_ID_TAREFA]
+    );
+
     const tarefa = {
       title: montarTituloCurto_(ideia),
       notes: montarNotas_({
@@ -121,19 +146,24 @@ function processarLinha_(planilha, aba, numeroLinha) {
         anexos: anexos,
         planilha: planilha.getUrl()
       }),
-      due: formatarDataTarefa_(dataPrazo),
+      due: formatarDataTarefa_(dataValida, planilha.getSpreadsheetTimeZone()),
       status: 'needsAction'
     };
 
-    let tarefaSalva;
+    let resultado;
+
     if (idExistente) {
-      tarefaSalva = Tasks.Tasks.update(tarefa, lista.id, idExistente);
+      try {
+        resultado = Tasks.Tasks.update(tarefa, lista.id, idExistente);
+      } catch (erroAtualizacao) {
+        resultado = Tasks.Tasks.insert(tarefa, lista.id);
+      }
     } else {
-      tarefaSalva = Tasks.Tasks.insert(tarefa, lista.id);
+      resultado = Tasks.Tasks.insert(tarefa, lista.id);
     }
 
     atualizarCelula_(aba, numeroLinha, colunaStatus, 'Tarefa criada');
-    atualizarCelula_(aba, numeroLinha, colunaId, tarefaSalva.id);
+    atualizarCelula_(aba, numeroLinha, colunaId, resultado.id);
   } catch (erro) {
     atualizarCelula_(
       aba,
@@ -145,120 +175,165 @@ function processarLinha_(planilha, aba, numeroLinha) {
   }
 }
 
+/**
+ * Procura a lista em todas as páginas de resultados e a cria se necessário.
+ */
 function obterOuCriarListaDeTarefas_() {
-  const resposta = Tasks.Tasklists.list({ maxResults: 100 });
-  const listas = resposta.items || [];
+  let token = null;
 
-  const existente = listas.find(function(lista) {
-    return lista.title === CONFIG.NOME_LISTA_TAREFAS;
-  });
+  do {
+    const parametros = { maxResults: 100 };
 
-  if (existente) {
-    return existente;
-  }
+    if (token) {
+      parametros.pageToken = token;
+    }
+
+    const resposta = Tasks.Tasklists.list(parametros);
+    const listaExistente = (resposta.items || []).find(function(lista) {
+      return lista.title === CONFIG.NOME_LISTA_TAREFAS;
+    });
+
+    if (listaExistente) {
+      return listaExistente;
+    }
+
+    token = resposta.nextPageToken || null;
+  } while (token);
 
   return Tasks.Tasklists.insert({
     title: CONFIG.NOME_LISTA_TAREFAS
   });
 }
 
+/**
+ * Monta o título visível da tarefa e evita títulos excessivamente longos.
+ */
 function montarTituloCurto_(ideia) {
   const prefixo = '🟢 ';
-  const texto = String(ideia).replace(/\s+/g, ' ').trim();
-  const limiteTexto = CONFIG.LIMITE_TITULO - prefixo.length;
+  const disponivel = CONFIG.LIMITE_TITULO - prefixo.length;
+  const titulo = String(ideia).trim();
 
-  if (texto.length <= limiteTexto) {
-    return prefixo + texto;
+  if (titulo.length <= disponivel) {
+    return prefixo + titulo;
   }
 
-  return prefixo + texto.slice(0, limiteTexto - 1).trimEnd() + '…';
+  return prefixo + titulo.slice(0, Math.max(disponivel - 1, 1)).trimEnd() + '…';
 }
 
+/**
+ * Mantém o título completo e os dados da resposta nas observações.
+ * Se o texto ficar muito longo, preserva o link da planilha.
+ */
 function montarNotas_(dados) {
   const secoes = [
     ['IDEIA', dados.ideia],
     ['TIPO', dados.tipo],
-    [
-      'PRÓXIMA AÇÃO',
-      dados.proximaAcao && dados.proximaAcao.trim() !== '.'
-        ? dados.proximaAcao
-        : ''
-    ],
+    ['AÇÕES', dados.proximaAcao],
     ['OBSERVAÇÕES E LINKS', dados.observacoes],
-    ['ANEXOS', dados.anexos],
-    ['PLANILHA', dados.planilha]
+    ['ANEXOS', dados.anexos]
   ];
 
-  return secoes
+  const corpo = secoes
     .filter(function(secao) {
-      return secao[1];
+      return secao[1] && String(secao[1]).trim() !== '.';
     })
     .map(function(secao) {
-      return secao[0] + '\n' + secao[1];
+      return secao[0] + '\n' + String(secao[1]).trim();
     })
     .join('\n\n');
-}
 
-function formatarDataTarefa_(valor) {
-  const data = valor instanceof Date ? valor : new Date(valor);
+  const rodape = dados.planilha
+    ? 'PLANILHA\n' + dados.planilha
+    : '';
+  const completo = [corpo, rodape].filter(Boolean).join('\n\n');
 
-  if (isNaN(data.getTime())) {
-    throw new Error('A data do prazo não é válida.');
+  if (completo.length <= CONFIG.LIMITE_NOTAS) {
+    return completo;
   }
 
-  const dia = Utilities.formatDate(
-    data,
-    Session.getScriptTimeZone(),
-    'yyyy-MM-dd'
+  const aviso = '\n\n[Conteúdo truncado. Consulte a planilha.]\n\n';
+  const espacoDisponivel = Math.max(
+    CONFIG.LIMITE_NOTAS - aviso.length - rodape.length,
+    0
   );
 
-  return dia + 'T00:00:00.000Z';
+  return corpo.slice(0, espacoDisponivel).trimEnd() + aviso + rodape;
 }
 
+/**
+ * A API do Google Tasks exige data/hora em formato RFC 3339.
+ */
+function formatarDataTarefa_(data, fusoHorario) {
+  return Utilities.formatDate(
+    data,
+    fusoHorario || Session.getScriptTimeZone(),
+    "yyyy-MM-dd'T'00:00:00.000'Z'"
+  );
+}
+
+/**
+ * Mapeia a primeira ocorrência de cada cabeçalho.
+ * Isso evita que colunas antigas duplicadas substituam os campos atuais.
+ */
 function mapearColunas_(cabecalhos) {
   const mapa = {};
 
   cabecalhos.forEach(function(cabecalho, indice) {
-    mapa[normalizar_(cabecalho)] = indice;
+    const chave = normalizar_(cabecalho);
+
+    if (
+      chave &&
+      !Object.prototype.hasOwnProperty.call(mapa, chave)
+    ) {
+      mapa[chave] = indice;
+    }
   });
 
   return mapa;
 }
 
-function localizarColuna_(mapa, nomes) {
-  for (let i = 0; i < nomes.length; i += 1) {
-    const chave = normalizar_(nomes[i]);
+function localizarColuna_(mapa, nomesAceitos) {
+  for (let i = 0; i < nomesAceitos.length; i++) {
+    const chave = normalizar_(nomesAceitos[i]);
+
     if (Object.prototype.hasOwnProperty.call(mapa, chave)) {
-      return mapa[chave];
+      return mapa[chave] + 1;
     }
   }
 
-  return -1;
+  return 0;
 }
 
-function primeiroValor_(valores, mapa, nomes) {
-  const coluna = localizarColuna_(mapa, nomes);
-  return coluna === -1 ? '' : String(valores[coluna] || '').trim();
+function obterValorExibido_(mapa, valores, nomesAceitos) {
+  const coluna = localizarColuna_(mapa, nomesAceitos);
+  return coluna ? String(valores[coluna - 1] || '').trim() : '';
 }
 
-function garantirColuna_(aba, nome) {
+function obterValorOriginal_(mapa, valores, nomesAceitos) {
+  const coluna = localizarColuna_(mapa, nomesAceitos);
+  return coluna ? valores[coluna - 1] : '';
+}
+
+function garantirColuna_(aba, titulo) {
   const ultimaColuna = Math.max(aba.getLastColumn(), 1);
   const cabecalhos = aba
     .getRange(1, 1, 1, ultimaColuna)
     .getDisplayValues()[0];
   const existe = cabecalhos.some(function(cabecalho) {
-    return normalizar_(cabecalho) === normalizar_(nome);
+    return normalizar_(cabecalho) === normalizar_(titulo);
   });
 
   if (!existe) {
-    aba.getRange(1, ultimaColuna + 1).setValue(nome);
+    aba.getRange(1, ultimaColuna + 1).setValue(titulo);
   }
 }
 
-function atualizarCelula_(aba, linha, indiceColuna, valor) {
-  if (indiceColuna !== -1) {
-    aba.getRange(linha, indiceColuna + 1).setValue(valor);
+function atualizarCelula_(aba, linha, coluna, valor) {
+  if (!coluna) {
+    throw new Error('Uma coluna técnica necessária não foi encontrada.');
   }
+
+  aba.getRange(linha, coluna).setValue(valor);
 }
 
 function normalizar_(texto) {
